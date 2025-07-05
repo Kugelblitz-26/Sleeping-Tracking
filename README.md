@@ -1,11 +1,4 @@
-Bangle.js AI Sleep Tracker & Web Analyzer
-A complete ecosystem for sleep monitoring using a Bangle.js 1 and final state of your project. It explains the "why" behind the final design choices (like using a command-based model smartwatch. This project features a robust on-watch application for data collection and a modern web application for fetching, analyzing, and instead of auto-send), which is excellent for showing your understanding in a project portfolio.
-This README is designed to be visualizing sleep data over Bluetooth.
-This repository contains all the code needed to build:
-A B a complete guide for anyone, including your future self or a project assessor, to understand, install, and use your entireangle.js App: A simple, efficient app to start and stop sleep logging (Heart Rate & Movement).
-A Web Application: A single index.html file that connects to the watch, fetches the data, performs ecosystem (Bangle.js app, Android app, and Web App).
-*README.md sleep stage analysis, and displays a beautiful, interactive report.
-🚀 Features
+
 
 # Bangle.js AI Sleep Tracker & Analysis Suite
 
