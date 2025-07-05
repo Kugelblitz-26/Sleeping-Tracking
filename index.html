@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bangle.js Sleep Analyzer</title>
+    <!-- Include Chart.js from a CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            background-color: #f4f7f6;
+            color: #333;
+        }
+        #main-container {
+            width: 100%;
+            max-width: 800px;
+            background: white;
+            padding: 2em;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #1a237e;
+        }
+        button {
+            background-color: #3949ab;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #283593;
+        }
+        button:disabled {
+            background-color: #9fa8da;
+            cursor: not-allowed;
+        }
+        #status {
+            margin-top: 20px;
+            font-style: italic;
+            color: #555;
+            min-height: 24px;
+        }
+        #report-card {
+            margin-top: 20px;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 20px;
+            display: none; /* Hidden by default */
+        }
+        .report-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+            font-size: 16px;
+        }
+        .color-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+        .dot-deep { background-color: #00008B; }
+        .dot-light { background-color: #87CEFA; }
+        .dot-rem { background-color: #9370DB; }
+        .dot-awake { background-color: #FF0000; }
+        #json-output {
+            margin-top: 20px;
+            background-color: #eee;
+            padding: 10px;
+            border-radius: 4px;
+            max-height: 200px;
+            overflow-y: auto;
+            display: none; /* Hidden by default */
+        }
+    </style>
+</head>
+<body>
+
+    <div id="main-container">
+        <h1>Bangle.js Sleep Analyzer</h1>
+        <p>Connect to your Bangle.js to fetch, analyze, and visualize your sleep data.</p>
+        <button id="connectButton">Connect & Analyze Sleep Data</button>
+        <div id="status">Status: Disconnected</div>
+        
+        <div id="report-card">
+            <h3>Sleep Report Summary</h3>
+            <p id="totalSleep"></p>
+            <p id="timeInBed"></p>
+            <hr>
+            <div class="report-item"><div class="color-dot dot-deep"></div><span id="deepSleep"></span></div>
+            <div class="report-item"><div class="color-dot dot-light"></div><span id="lightSleep"></span></div>
+            <div class="report-item"><div class="color-dot dot-rem"></div><span id="remSleep"></span></div>
+            <div class="report-item"><div class="color-dot dot-awake"></div><span id="awakeTime"></span></div>
+            <hr>
+            <p><strong>Tip:</strong> <em id="recommendation"></em></p>
+        </div>
+
+        <canvas id="sleepChart" style="margin-top: 20px;"></canvas>
+
+        <details style="margin-top: 20px;">
+            <summary>View Raw JSON Data</summary>
+            <pre id="json-output"></pre>
+        </details>
+    </div>
+    
+    <script>
+        // --- Element References ---
+        const connectButton = document.getElementById('connectButton');
+        const statusDiv = document.getElementById('status');
+        const reportCard = document.getElementById('report-card');
+        const sleepChartCanvas = document.getElementById('sleepChart');
+        const jsonOutput = document.getElementById('json-output');
+        
+        // --- FIX IS HERE ---
+        // Declare the sleepChart variable in the top-level scope so it's accessible everywhere.
+        let sleepChart; 
+        // --- END OF FIX ---
+
+        // --- Web Bluetooth Constants ---
+        const UART_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+        const RX_CHARACTERISTIC_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+        const EOT_CHARACTER = "\x04";
+
+        connectButton.addEventListener('click', async () => {
+            try {
+                // Reset UI
+                // Now this check will work correctly.
+                if (sleepChart) {
+                    sleepChart.destroy();
+                }
+                reportCard.style.display = 'none';
+                jsonOutput.parentElement.open = false; // Close the <details> tag
+                
+                statusDiv.innerText = 'Requesting Bluetooth device...';
+                connectButton.disabled = true;
+
+                const device = await navigator.bluetooth.requestDevice({
+                    filters: [{ services: [UART_SERVICE_UUID] }]
+                });
+
+                statusDiv.innerText = 'Connecting to GATT Server...';
+                const server = await device.gatt.connect();
+
+                device.addEventListener('gattserverdisconnected', () => {
+                    statusDiv.innerText = 'Disconnected.';
+                    connectButton.disabled = false;
+                });
+
+                statusDiv.innerText = 'Getting UART Service...';
+                const service = await server.getPrimaryService(UART_SERVICE_UUID);
+
+                statusDiv.innerText = 'Getting RX Characteristic...';
+                const rxCharacteristic = await service.getCharacteristic(RX_CHARACTERISTIC_UUID);
+
+                let receivedData = "";
+                rxCharacteristic.addEventListener('characteristicvaluechanged', event => {
+                    const value = new TextDecoder().decode(event.target.value);
+                    receivedData += value;
+                    statusDiv.innerText = `Receiving data... (${receivedData.length} bytes)`;
+
+                    if (receivedData.includes(EOT_CHARACTER)) {
+                        const finalData = receivedData.replace(EOT_CHARACTER, '');
+                        processAndDisplayData(finalData);
+                        server.disconnect();
+                    }
+                });
+
+                statusDiv.innerText = 'Subscribing to notifications... Waiting for data.';
+                await rxCharacteristic.startNotifications();
+
+            } catch (error) {
+                statusDiv.innerText = `Error: ${error.message}`;
+                connectButton.disabled = false;
+            }
+        });
+
+        function processAndDisplayData(jsonString) {
+            statusDiv.innerText = 'Analyzing data...';
+            if (jsonString.startsWith("ERROR")) {
+                statusDiv.innerText = `Error from Bangle.js: ${jsonString}`;
+                return;
+            }
+            try {
+                const data = JSON.parse(jsonString);
+                const report = analyzeSleep(data);
+                
+                displayReport(report);
+                displayChart(report.classifiedLog, data);
+                
+                jsonOutput.textContent = JSON.stringify(data, null, 2);
+
+            } catch (error) {
+                statusDiv.innerText = `Error parsing data: ${error.message}`;
+                console.error("Raw data received:", jsonString);
+            }
+        }
+
+        function analyzeSleep(data) {
+            if (!data || data.length < 10) {
+                return { recommendation: "Not enough data to analyze." };
+            }
+            const hrs = data.map(d => d.hr);
+            const movements = data.map(d => d.movement);
+            const hrBaseline = hrs.reduce((a, b) => a + b, 0) / hrs.length;
+            const sortedMovements = [...movements].sort((a, b) => a - b);
+            const moveThresholdHigh = sortedMovements[Math.floor(sortedMovements.length * 0.95)];
+            const moveThresholdLow = sortedMovements[Math.floor(sortedMovements.length * 0.40)];
+            const classifiedLog = [];
+            const stageCounts = { Awake: 0, Light: 0, Deep: 0, REM: 0 };
+            for (let i = 0; i < data.length; i++) {
+                const point = data[i];
+                let stage = "";
+                if (point.movement > moveThresholdHigh) stage = "Awake";
+                else if (point.movement > moveThresholdLow) stage = "Light";
+                else if (point.hr > hrBaseline) stage = "REM";
+                else stage = "Deep";
+                classifiedLog.push(stage);
+                stageCounts[stage]++;
+            }
+            const totalMinutes = data.length;
+            const sleepMinutes = totalMinutes - stageCounts.Awake;
+            let recommendation = "Good sleep balance overall.";
+            if (stageCounts.Deep < (totalMinutes * 0.15)) recommendation = "Try for more deep sleep. Avoid caffeine.";
+            else if (stageCounts.Awake > (totalMinutes * 0.1)) recommendation = "You were restless. Create a calmer sleep environment.";
+            return {
+                timeInBed: `${Math.floor(totalMinutes / 60)}h ${totalMinutes % 60}m`,
+                totalSleep: `${Math.floor(sleepMinutes / 60)}h ${sleepMinutes % 60}m`,
+                deepSleepMinutes: stageCounts.Deep, lightSleepMinutes: stageCounts.Light,
+                remSleepMinutes: stageCounts.REM, awakeMinutes: stageCounts.Awake,
+                recommendation: recommendation, classifiedLog: classifiedLog
+            };
+        }
+
+        function displayReport(report) {
+            document.getElementById('totalSleep').innerText = `Total Sleep: ${report.totalSleep}`;
+            document.getElementById('timeInBed').innerText = `Time in Bed: ${report.timeInBed}`;
+            document.getElementById('deepSleep').innerText = `Deep Sleep: ${report.deepSleepMinutes} min`;
+            document.getElementById('lightSleep').innerText = `Light Sleep: ${report.lightSleepMinutes} min`;
+            document.getElementById('remSleep').innerText = `REM Sleep: ${report.remSleepMinutes} min`;
+            document.getElementById('awakeTime').innerText = `Awake Time: ${report.awakeMinutes} min`;
+            document.getElementById('recommendation').innerText = report.recommendation;
+            reportCard.style.display = 'block';
+        }
+
+        function displayChart(stages, rawData) {
+            const stageToValue = { "Awake": 1, "REM": 2, "Light": 3, "Deep": 4 };
+            const stageColors = { "Awake": "#FF0000", "REM": "#9370DB", "Light": "#87CEFA", "Deep": "#00008B" };
+            const chartData = stages.map(stage => stageToValue[stage]);
+            const colors = stages.map(stage => stageColors[stage]);
+            const hrData = rawData.map(d => d.hr);
+            const ctx = sleepChartCanvas.getContext('2d');
+            sleepChart = new Chart(ctx, { // Assigns to the variable we declared at the top
+                type: 'bar',
+                data: {
+                    labels: rawData.map((d, i) => i % 30 === 0 ? new Date(d.time).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''),
+                    datasets: [{
+                        label: 'Sleep Stage', data: chartData, backgroundColor: colors,
+                        borderColor: colors, borderWidth: 1, barPercentage: 1.0,
+                        categoryPercentage: 1.0, yAxisID: 'yStages'
+                    }, {
+                        type: 'line', label: 'Heart Rate', data: hrData,
+                        borderColor: 'rgba(255, 99, 132, 0.5)', backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                        pointRadius: 0, tension: 0.4, yAxisID: 'yHR'
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    scales: {
+                        x: { grid: { display: false } },
+                        yStages: {
+                            min: 0.5, max: 4.5,
+                            ticks: { stepSize: 1, callback: (v) => ['','Awake', 'REM', 'Light', 'Deep'][v] || '' }
+                        },
+                        yHR: { position: 'right', grid: { drawOnChartArea: false }, suggestedMin: 40, suggestedMax: 100 }
+                    },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
